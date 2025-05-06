@@ -1,0 +1,23 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template for dogi-slack Lambda application
+
+Resources:
+  SlackNotifyFunction: # You can choose a logical name for your function
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures:
+        - x86_64 # Or arm64, depending on your target environment
+      # If your Lambda needs to handle API Gateway events, you can uncomment and configure the following
+      # Events:
+      #   ApiEvent:
+      #     Type: Api
+      #     Properties:
+      #       Path: /notify
+      #       Method: post
+    Metadata:
+      Dockerfile: Dockerfile # Name of your Dockerfile
+      DockerContext: ./ # Path to your Docker build context (project root)
+      DockerTag: dogi-slack-lambda-v1 # Image tag used by SAM build
