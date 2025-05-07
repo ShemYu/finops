@@ -6,9 +6,9 @@
     "account": "123456789012",
     "time": "2024-05-06T08:55:00Z",
     "region": "ap-northeast-1",
-    "resources": ["arn:aws:ec2:ap-northeast-1:123456789012:instance/i-0abc123456def"],
+    "resources": ["arn:aws:ec2:ap-northeast-1:123456789012:instance/i-0e1aecda99aa63792"],
     "detail": {
-      "instance-id": "i-0abc123456def",
-      "state": "running"
+      "instance-id": "i-0e1aecda99aa63792",
+      "state": "stopping"
     }
 }
