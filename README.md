@@ -1,6 +1,36 @@
 # finops
 
-This project provides a Lambda function that sends notifications to Slack based on AWS EC2 instance state changes. It utilizes an EventBridge rule to trigger the Lambda function.
+
+
+This project aims to automate cloud resource management (finops) and is planned to advance in three main directions:
+
+1. **Monitoring**: Automatically monitor the status and changes of AWS resources (such as EC2 instances).
+2. **Alerting**: Instantly send alerts to Slack or other communication platforms when abnormal or important events are detected.
+3. **Optimization**: In the future, automatically analyze resource usage and provide cost optimization suggestions or automated adjustments.
+
+Currently, the "Monitoring" and "Alerting" core features have been implemented: This project provides an AWS Lambda function that automatically sends notifications to Slack based on EC2 instance state changes. The Lambda is triggered by EventBridge rules and all resources are managed using Infrastructure as Code (IaC).
+
+![image](img/image.png)
+
+*The above is a simple architecture diagram of this project, illustrating the automated flow from AWS events through EventBridge and Lambda to Slack.*
+
+## Project Structure
+
+```
+├── app/
+│   └── lambda_function.py   # Main entry point for the Lambda function
+├── iac/
+│   ├── cloudformation/      # CloudFormation templates (e.g., eventbridge.json)
+│   └── iam/                # IAM Policy definitions (e.g., information-readonly-policy.json)
+├── .env                    # Environment variable config for Slack webhook, AWS parameters, etc.
+├── Makefile.example        # Makefile example
+├── README.md               # Project documentation
+└── ...
+```
+
+- `app/lambda_function.py`: Main Lambda function code, processes events from EventBridge and sends notifications to Slack.
+- `iac/`: Contains IaC files, including CloudFormation and IAM Policy, for automated AWS resource deployment.
+- `.env`: Environment variable configuration file. Please fill in Slack Webhook URL, AWS parameters, and other sensitive information (do not commit to version control).
 
 ## Prerequisites
 
@@ -88,24 +118,23 @@ You can test the Lambda function locally using AWS SAM CLI before deploying.
 2.  Run the local invocation:
 
     ```bash
+    sam build
     make test
     ```
     This command executes `sam local invoke SlackNotifyFunction -e event.json`, where `SlackNotifyFunction` is the logical ID of your function in your SAM template (if you are using one, or it's a conventional name for the test).
 
 ## Infrastructure as Code (IaC)
 
-This project includes CloudFormation templates to set up necessary AWS resources. These templates are located in the `iac/cloudformation/` directory.
+This project uses IaC to manage AWS resources, with all templates stored in the `iac/` directory:
 
-### EventBridge Rule for EC2 State Changes
+- `iac/cloudformation/`: CloudFormation templates (e.g., eventbridge.json) for automated creation of EventBridge rules and other resources.
+- `iac/iam/`: IAM Policy definition files, which can be adjusted as needed.
 
-The `iac/cloudformation/eventbridge.json` template creates an AWS EventBridge rule named `ec2-state-notify`. This rule is configured to:
+### Automated Deployment of EventBridge Rule
 
-*   Listen for EC2 instance state-change notifications (`running`, `terminated`, `stopping`).
-*   Target the `dogi-slack-notification` Lambda function.
+`iac/cloudformation/eventbridge.json` creates an EventBridge rule named `ec2-state-notify` that listens for EC2 instance state changes (such as running, terminated, stopping) and triggers the specified Lambda (default is `dogi-slack-notification`).
 
 **Deployment:**
-
-To deploy this CloudFormation stack, use the AWS CLI. Make sure your Lambda function (e.g., `dogi-slack-notification` as specified in the template) is already deployed.
 
 ```bash
 aws cloudformation deploy \
@@ -114,6 +143,15 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
 ```
 
-**Note:**
-*   Ensure your AWS CLI is configured with the necessary permissions to create EventBridge rules and related resources.
-*   The CloudFormation template `iac/cloudformation/eventbridge.json` targets a Lambda function named `dogi-slack-notification`. If your Lambda function has a different name, you must update the `Arn` within the `Targets` section of the `eventbridge.json` file before deploying this stack.
+> Note:
+> - Please ensure your AWS CLI has the necessary permissions to create EventBridge, IAM, and other resources.
+> - If your Lambda function does not use the default name, modify the ARN in the Targets section of eventbridge.json before deployment.
+
+---
+
+## Future Plans
+
+- **Automated Resource Optimization Alerts**: Periodically send alerts to Slack based on AWS Compute Optimizer recommendations for over-provisioned or underutilized resources.
+- **GPU Idle Resource Announcements**: Regularly detect idle GPU resources and announce them in Slack to help the team release or adjust resources promptly.
+- **Tagging Resource Owners**: Automatically tag relevant users in Slack notifications to improve tracking efficiency and facilitate problem resolution.
+- **CICD Implementation**: Introduce automated testing, deployment, and IaC validation to achieve continuous integration and continuous delivery, improving project quality and development efficiency.
