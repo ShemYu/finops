@@ -1,9 +1,21 @@
 import json
 import requests
+import os
+from dotenv import load_dotenv
 
-SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/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"  # 你的 webhook 填這邊
+
+load_dotenv() 
+
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
+DEBUG = True
 
 def lambda_handler(event, context):
+    if not SLACK_WEBHOOK_URL:
+        return {
+            "statusCode": 500,
+            "body": "Error: SLACK_WEBHOOK_URL environment variable not set."
+        }
+
     message = {
         "text": "🚀 Hello from AWS Lambda!"
     }
@@ -14,6 +26,13 @@ def lambda_handler(event, context):
             headers={"Content-Type": "application/json"},
             data=json.dumps(message)
         )
+    
+        if DEBUG:
+            response = requests.post(
+                SLACK_WEBHOOK_URL,
+                headers={"Content-Type": "application/json"},
+                data=json.dumps({"text": "Debug mode: " + json.dumps(event)})
+            )
 
         if response.status_code != 200:
             return {
