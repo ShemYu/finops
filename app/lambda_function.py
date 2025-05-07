@@ -16,6 +16,25 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
 
 def get_instance_info(instance_id, region):
+    """Retrieves detailed information about a specific EC2 instance.
+
+    Args:
+        instance_id (str): The ID of the EC2 instance.
+        region (str): The AWS region where the instance is located.
+
+    Returns:
+        dict: A dictionary containing instance details such as instance type,
+            name tag, EBS volume size, EBS volume type, and all tags.
+            Returns 'unknown' for EBS details if not found.
+            Example:
+            {
+                "instance_type": "t2.micro",
+                "name": "my-instance",
+                "ebs_volume_size": 8,
+                "ebs_volume_type": "gp2",
+                "tags": {"Name": "my-instance", "Environment": "dev"}
+            }
+    """
     ec2 = boto3.client("ec2", region_name=region)
     response = ec2.describe_instances(InstanceIds=[instance_id])
     instance = response["Reservations"][0]["Instances"][0]
@@ -46,6 +65,30 @@ def get_instance_info(instance_id, region):
 
 
 def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
+    """Identifies the IAM user or role that created or modified an EC2 instance.
+
+    It queries CloudTrail logs for events like RunInstances, TerminateInstances,
+    or StopInstances associated with the given instance ID.
+
+    Args:
+        instance_id (str): The ID of the EC2 instance.
+        region (str): The AWS region where the instance is located.
+        event_state (str): The current state of the instance to match the
+            CloudTrail event name (e.g., "running", "terminated", "stopping").
+        lookback_days (int, optional): The number of days to look back in
+            CloudTrail logs. Defaults to 7.
+
+    Returns:
+        dict: A dictionary containing the event time, user ARN, and username
+            of the entity that performed the action. Returns None if no
+            matching event is found.
+            Example:
+            {
+                "time": "20230101 10:00:00",
+                "user_arn": "arn:aws:iam::123456789012:user/johndoe",
+                "username": "johndoe"
+            }
+    """
     ct = boto3.client("cloudtrail", region_name=region)
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=lookback_days)
@@ -55,7 +98,6 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
         "stopping": "StopInstances",
     }
 
-    # 只按 EventName 查
     resp = ct.lookup_events(
         LookupAttributes=[
             {
@@ -70,7 +112,6 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
 
     for event_rec in resp.get("Events", []):
         evt = json.loads(event_rec["CloudTrailEvent"])
-        # 核对 responseElements 里有没有这台 instance
         items = evt.get("responseElements", {}).get("instancesSet", {}).get("items", [])
         ids = [it.get("instanceId") for it in items]
         if instance_id in ids:
@@ -88,19 +129,30 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
 def send_ec2_event_to_slack(
     instance_info, creator_info, action_type, region, instance_id
 ):
-    """
-    instance_info: {
-      "instance_type": str,
-      "name": str,
-      "ebs_volume_size": int,      # GiB
-      "ebs_volume_type": str,
-      "tags": dict
-    }
-    creator_info: {
-      "time": str,                 # ISO timestamp
-      "user_arn": str,
-      "username": str
-    }
+    """Constructs a Slack message payload for EC2 instance state change events.
+
+    The message includes instance details, creator information, and relevant
+    reminders or warnings based on the action type (running, terminated, stopping).
+
+    Args:
+        instance_info (dict): Information about the EC2 instance. Expected keys:
+            "instance_type" (str): The type of the instance (e.g., "t2.micro").
+            "name" (str): The 'Name' tag of the instance, or "N/A".
+            "ebs_volume_size" (int or str): Size of the root EBS volume in GiB.
+            "ebs_volume_type" (str): Type of the root EBS volume (e.g., "gp2").
+            "tags" (dict): All tags associated with the instance.
+        creator_info (dict): Information about the user who initiated the action.
+            Expected keys:
+            "time" (str): Timestamp of the action (e.g., "20230101 10:00:00").
+            "user_arn" (str): ARN of the IAM user/role.
+            "username" (str): Username or role name.
+        action_type (str): The type of EC2 action ("running", "terminated",
+            "stopping").
+        region (str): The AWS region of the instance.
+        instance_id (str): The ID of the EC2 instance.
+
+    Returns:
+        dict: A Slack message payload formatted with blocks.
     """
     action_title_map = {
         "running": "🚀 EC2 Instance Started 🚀",
@@ -129,7 +181,6 @@ def send_ec2_event_to_slack(
     ebs_warning = (
         "\n⚠️ Large EBS ⚠️" if int(instance_info["ebs_volume_size"]) > 1024 else ""
     )
-    # 1️⃣ 組出 Slack blocks
     blocks = [
         {
             "type": "header",
@@ -196,6 +247,15 @@ def send_ec2_event_to_slack(
 
 
 def send_message(message):
+    """Sends a message payload to the configured Slack webhook URL.
+
+    Args:
+        message (dict): The Slack message payload (e.g., a blocks structure).
+
+    Returns:
+        dict: A dictionary with "statusCode" and "body" indicating the result
+            of the Slack API call. Returns status code 500 on failure.
+    """
     response = requests.post(
         SLACK_WEBHOOK_URL,
         headers={"Content-Type": "application/json"},
@@ -206,6 +266,23 @@ def send_message(message):
 
 
 def lambda_handler(event, context):
+    """AWS Lambda handler function for processing EC2 state change events.
+
+    This function is triggered by an AWS EventBridge rule when an EC2 instance
+    changes state. It gathers instance information, identifies the event creator,
+    constructs a Slack message, and sends it.
+
+    Args:
+        event (dict): The event payload from EventBridge. Expected to contain
+            `event["detail"]["instance-id"]`, `event["region"]`, and
+            `event["detail"]["state"]`.
+        context (object): The AWS Lambda runtime information. Not used directly
+            in this function but required by the Lambda signature.
+
+    Returns:
+        dict: A dictionary with "statusCode" and "body" indicating the outcome.
+            Returns status code 200 on success, 500 on error.
+    """
     if not SLACK_WEBHOOK_URL:
         return {
             "statusCode": 500,
