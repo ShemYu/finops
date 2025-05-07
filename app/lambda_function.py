@@ -2,6 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+import random
 
 import boto3
 import requests
@@ -12,7 +13,6 @@ load_dotenv()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
-DEBUG = True
 
 
 def get_instance_info(instance_id, region):
@@ -49,7 +49,7 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
     ct = boto3.client("cloudtrail", region_name=region)
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=lookback_days)
-    event_state_attribute_value_maps = {
+    event_state_attribute_value_mapping = {
         "running": "RunInstances",
         "terminated": "TerminateInstances",
         "stopping": "StopInstances",
@@ -60,7 +60,7 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
         LookupAttributes=[
             {
                 "AttributeKey": "EventName",
-                "AttributeValue": event_state_attribute_value_maps[event_state],
+                "AttributeValue": event_state_attribute_value_mapping[event_state],
             }
         ],
         StartTime=start_time,
@@ -85,7 +85,7 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
     return None
 
 
-def send_ec2_event_to_slack(instance_info, creator_info, action_type):
+def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, instance_id):
     """
     instance_info: {
       "instance_type": str,
@@ -100,13 +100,48 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type):
       "username": str
     }
     """
-
+    action_title_map = {
+        "running": "🚀 EC2 Instance Started 🚀",
+        "terminated": "💀 EC2 Instance Terminated 💀",
+        "stopping": "😴 EC2 Instance Stopping 😴",
+    }
+    reminders = [
+        "Billing is charging from this moment.",
+        "Hourly charges are now in effect.",
+        "Running and generating costs.",
+        "Monitor usage to control expenses.",
+        "Ensure you stop the instance when not needed."
+    ]
+    ec2_stop_reminders = [
+        "EBS volume storage charges continuely.",
+        "Persistent EBS and allocated Elastic IP COSTS still apply.",
+        "Stopping an EC2 instance does not STOP EBS or Elastic IP COSTS.",
+        "EC2 instance is stopped; you will continue to incur EBS volume FEES.",
+        "Remember to release Elastic IPs and delete unused volumes to avoid CHARGES."
+    ]
+    action_sub_title_map = {
+        "running": reminders[random.randint(0, len(reminders) - 1)],
+        "terminated": f"Good job {creator_info['username']} 🥰🥰🥰",
+        "stopping": ec2_stop_reminders[random.randint(0, len(ec2_stop_reminders) - 1)],
+    }
     # 1️⃣ 組出 Slack blocks
     blocks = [
         {
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*EC2 Instance State Change Event!*"},
-        },
+			"type": "header",
+			"text": {
+				"type": "plain_text",
+				"text": action_title_map[action_type],
+				"emoji": True
+			}
+		},
+        {
+			"type": "section",
+			"text": {
+				"type": "plain_text",
+				"text": action_sub_title_map[action_type],
+				"emoji": True
+			}
+		},
         {"type": "divider"},
         {
             "type": "section",
@@ -118,7 +153,7 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type):
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})",
+                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})" + " \n⚠️ Large EBS ⚠️" if (instance_info['ebs_volume_size']) > 2 else "",
                 },
                 {
                     "type": "mrkdwn",
@@ -136,6 +171,24 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type):
                 {"type": "mrkdwn", "text": f"*Action Time:*\n{creator_info['time']}"},
             ],
         },
+        {
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "For more detail information 👉"
+			},
+			"accessory": {
+				"type": "button",
+				"text": {
+					"type": "plain_text",
+					"text": "Go To AWS EC2",
+					"emoji": True
+				},
+				"value": "click_me_123",
+				"url": f"https://{region}.console.aws.amazon.com/ec2/home?region={region}#InstanceDetails:instanceId={instance_id}",
+				"action_id": "button-action"
+			}
+		}
     ]
 
     payload = {"blocks": blocks}
@@ -160,25 +213,19 @@ def lambda_handler(event, context):
             "body": "Error: SLACK_WEBHOOK_URL environment variable not set.",
         }
 
-    message = {"text": "🚀 Hello from AWS Lambda!"}
-
     try:
-        send_message(message)
-
-        if DEBUG:
-            instance_info = get_instance_info(
-                event["detail"]["instance-id"], event["region"]
-            )
-            creator_info = get_creator_of_instance(
-                event["detail"]["instance-id"],
-                event["region"],
-                event["detail"]["state"],
-            )
-            block = send_ec2_event_to_slack(
-                instance_info, creator_info, event["detail"]["state"]
-            )
-            send_message(block)
-
+        instance_info = get_instance_info(
+            event["detail"]["instance-id"], event["region"]
+        )
+        creator_info = get_creator_of_instance(
+            event["detail"]["instance-id"],
+            event["region"],
+            event["detail"]["state"],
+        )
+        block = send_ec2_event_to_slack(
+            instance_info, creator_info, event["detail"]["state"], event["region"], event["detail"]["instance-id"]
+        )
+        send_message(block)
     except Exception as e:
         return {"statusCode": 500, "body": f"Error: {str(e)}"}
 
