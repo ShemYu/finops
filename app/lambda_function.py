@@ -1,8 +1,8 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 import random
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import requests
@@ -85,7 +85,9 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
     return None
 
 
-def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, instance_id):
+def send_ec2_event_to_slack(
+    instance_info, creator_info, action_type, region, instance_id
+):
     """
     instance_info: {
       "instance_type": str,
@@ -110,39 +112,41 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, in
         "Hourly charges are now in effect.",
         "Running and generating costs.",
         "Monitor usage to control expenses.",
-        "Ensure you stop the instance when not needed."
+        "Ensure you stop the instance when not needed.",
     ]
     ec2_stop_reminders = [
         "EBS volume storage charges continuely.",
         "Persistent EBS and allocated Elastic IP COSTS still apply.",
         "Stopping an EC2 instance does not STOP EBS or Elastic IP COSTS.",
         "EC2 instance is stopped; you will continue to incur EBS volume FEES.",
-        "Remember to release Elastic IPs and delete unused volumes to avoid CHARGES."
+        "Remember to release Elastic IPs and delete unused volumes to avoid CHARGES.",
     ]
     action_sub_title_map = {
         "running": reminders[random.randint(0, len(reminders) - 1)],
         "terminated": f"Good job {creator_info['username']} 🥰🥰🥰",
         "stopping": ec2_stop_reminders[random.randint(0, len(ec2_stop_reminders) - 1)],
     }
-    ebs_warning = "\n⚠️ Large EBS ⚠️" if int(instance_info['ebs_volume_size']) > 1024 else ""
+    ebs_warning = (
+        "\n⚠️ Large EBS ⚠️" if int(instance_info["ebs_volume_size"]) > 1024 else ""
+    )
     # 1️⃣ 組出 Slack blocks
     blocks = [
         {
-			"type": "header",
-			"text": {
-				"type": "plain_text",
-				"text": action_title_map[action_type],
-				"emoji": True
-			}
-		},
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": action_title_map[action_type],
+                "emoji": True,
+            },
+        },
         {
-			"type": "section",
-			"text": {
-				"type": "plain_text",
-				"text": action_sub_title_map[action_type],
-				"emoji": True
-			}
-		},
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": action_sub_title_map[action_type],
+                "emoji": True,
+            },
+        },
         {"type": "divider"},
         {
             "type": "section",
@@ -154,7 +158,8 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, in
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})" + ebs_warning,
+                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})"
+                    + ebs_warning,
                 },
                 {
                     "type": "mrkdwn",
@@ -173,23 +178,16 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, in
             ],
         },
         {
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "For more detail information 👉"
-			},
-			"accessory": {
-				"type": "button",
-				"text": {
-					"type": "plain_text",
-					"text": "Go To AWS EC2",
-					"emoji": True
-				},
-				"value": "click_me_123",
-				"url": f"https://{region}.console.aws.amazon.com/ec2/home?region={region}#InstanceDetails:instanceId={instance_id}",
-				"action_id": "button-action"
-			}
-		}
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "For more detail information 👉"},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Go To AWS EC2", "emoji": True},
+                "value": "click_me_123",
+                "url": f"https://{region}.console.aws.amazon.com/ec2/home?region={region}#InstanceDetails:instanceId={instance_id}",
+                "action_id": "button-action",
+            },
+        },
     ]
 
     payload = {"blocks": blocks}
@@ -224,7 +222,11 @@ def lambda_handler(event, context):
             event["detail"]["state"],
         )
         block = send_ec2_event_to_slack(
-            instance_info, creator_info, event["detail"]["state"], event["region"], event["detail"]["instance-id"]
+            instance_info,
+            creator_info,
+            event["detail"]["state"],
+            event["region"],
+            event["detail"]["instance-id"],
         )
         send_message(block)
     except Exception as e:
