@@ -64,23 +64,32 @@ def get_instance_info(instance_id, region):
     }
 
 
-def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
-    """Identifies the IAM user or role that created or modified an EC2 instance.
+def get_creator_of_instance(
+    instance_id: str, region: str, event_state: str, lookback_days: int = 7
+):
+    """Identifies the IAM user or role that initiated an EC2 instance state change.
 
-    It queries CloudTrail logs for events like RunInstances, TerminateInstances,
-    or StopInstances associated with the given instance ID.
+    This function queries AWS CloudTrail logs for events corresponding to the
+    specified instance ID and event state (e.g., "running", "stopping",
+    "terminated"). It handles pagination to search through CloudTrail events
+    within the lookback period. It checks for the instance ID in both
+    `responseElements.instancesSet.items` and `requestParameters.instancesSet.items`
+    of the CloudTrail event record.
 
     Args:
         instance_id (str): The ID of the EC2 instance.
         region (str): The AWS region where the instance is located.
-        event_state (str): The current state of the instance to match the
-            CloudTrail event name (e.g., "running", "terminated", "stopping").
+        event_state (str): The target state of the instance. Supported values
+            are "running" (maps to RunInstances, StartInstances),
+            "stopping" (maps to StopInstances), and "terminated"
+            (maps to TerminateInstances).
         lookback_days (int, optional): The number of days to look back in
             CloudTrail logs. Defaults to 7.
 
     Returns:
         dict: A dictionary containing the event time, user ARN, and username
-            of the entity that performed the action. Returns None if no
+            of the entity that performed the action. The time is formatted
+            as 'YYYYMMDD HH:MM:SS' in UTC+8. Returns None if no
             matching event is found.
             Example:
             {
@@ -88,41 +97,67 @@ def get_creator_of_instance(instance_id, region, event_state, lookback_days=7):
                 "user_arn": "arn:aws:iam::123456789012:user/johndoe",
                 "username": "johndoe"
             }
+        None: If no relevant CloudTrail event is found for the instance.
+
+    Raises:
+        ValueError: If an unsupported `event_state` is provided.
     """
     ct = boto3.client("cloudtrail", region_name=region)
-    end_time = datetime.utcnow()
-    start_time = end_time - timedelta(days=lookback_days)
-    event_state_attribute_value_mapping = {
-        "running": "RunInstances",
-        "terminated": "TerminateInstances",
-        "stopping": "StopInstances",
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    start_time = now - timedelta(days=lookback_days)
+
+    name_map = {
+        "running": ["RunInstances", "StartInstances"],
+        "stopping": ["StopInstances"],
+        "terminated": ["TerminateInstances"],
     }
+    event_names = name_map.get(event_state.lower())
+    if not event_names:
+        raise ValueError(f"unsupported event_state: {event_state}")
 
-    resp = ct.lookup_events(
-        LookupAttributes=[
-            {
-                "AttributeKey": "EventName",
-                "AttributeValue": event_state_attribute_value_mapping[event_state],
-            }
-        ],
-        StartTime=start_time,
-        EndTime=end_time,
-        MaxResults=50,
-    )
+    next_token = None
+    while True:
+        kwargs = {
+            "LookupAttributes": [{"AttributeKey": "EventName", "AttributeValue": name}]
+            for name in event_names
+        }
+        kwargs["StartTime"] = start_time
+        kwargs["EndTime"] = now
+        kwargs["MaxResults"] = 50
+        if next_token:
+            kwargs["NextToken"] = next_token
 
-    for event_rec in resp.get("Events", []):
-        evt = json.loads(event_rec["CloudTrailEvent"])
-        items = evt.get("responseElements", {}).get("instancesSet", {}).get("items", [])
-        ids = [it.get("instanceId") for it in items]
-        if instance_id in ids:
-            user = evt["userIdentity"]["arn"]
-            return {
-                "time": event_rec["EventTime"]
-                .astimezone(timezone(timedelta(hours=8)))
-                .strftime("%Y%m%d %H:%M:%S"),
-                "user_arn": user,
-                "username": evt["userIdentity"].get("userName", "<role>"),
-            }
+        resp = ct.lookup_events(**kwargs)
+        for event_rec in resp.get("Events", []):
+            evt = json.loads(event_rec["CloudTrailEvent"])
+
+            items = (
+                evt.get("responseElements", {}).get("instancesSet", {}).get("items", [])
+            )
+
+            if not items:
+                items = (
+                    evt.get("requestParameters", {})
+                    .get("instancesSet", {})
+                    .get("items", [])
+                )
+
+            ids = [it.get("instanceId") for it in items]
+            logger.debug(f"event {event_rec['EventName']} ids: {ids}")
+            if instance_id in ids:
+                user = evt["userIdentity"]["arn"]
+                return {
+                    "time": event_rec["EventTime"]
+                    .astimezone(timezone(timedelta(hours=8)))
+                    .strftime("%Y%m%d %H:%M:%S"),
+                    "user_arn": user,
+                    "username": evt["userIdentity"].get("userName", "<role>"),
+                }
+
+        next_token = resp.get("NextToken")
+        if not next_token:
+            break
+
     return None
 
 
@@ -289,25 +324,25 @@ def lambda_handler(event, context):
             "body": "Error: SLACK_WEBHOOK_URL environment variable not set.",
         }
 
-    try:
-        instance_info = get_instance_info(
-            event["detail"]["instance-id"], event["region"]
-        )
-        creator_info = get_creator_of_instance(
-            event["detail"]["instance-id"],
-            event["region"],
-            event["detail"]["state"],
-        )
-        block = send_ec2_event_to_slack(
-            instance_info,
-            creator_info,
-            event["detail"]["state"],
-            event["region"],
-            event["detail"]["instance-id"],
-        )
-        send_message(block)
-    except Exception as e:
-        return {"statusCode": 500, "body": f"Error: {str(e)}"}
+    # try:
+    instance_info = get_instance_info(event["detail"]["instance-id"], event["region"])
+    logger.info(instance_info)
+    creator_info = get_creator_of_instance(
+        event["detail"]["instance-id"],
+        event["region"],
+        event["detail"]["state"],
+    )
+    logger.info(creator_info)
+    block = send_ec2_event_to_slack(
+        instance_info,
+        creator_info,
+        event["detail"]["state"],
+        event["region"],
+        event["detail"]["instance-id"],
+    )
+    send_message(block)
+    # except Exception as e:
+    #     return {"statusCode": 500, "body": f"Error: {str(e)}"}
 
     return {"statusCode": 200, "body": "Message sent to Slack!"}
 
