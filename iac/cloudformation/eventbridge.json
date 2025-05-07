@@ -1,0 +1,23 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "CloudFormation template for EventBridge Ruleec2-state-notify",
+    "Resources": {
+      "Rule728b41d1": {
+        "Type": "AWS::Events::Rule",
+        "Properties": {
+          "Name": "ec2-state-notify",
+          "EventPattern": "{\"source\":[\"aws.ec2\"],\"detail-type\":[\"EC2 Instance State-change Notification\"],\"detail\":{\"state\":[\"running\",\"terminated\",\"stopping\"]}}",
+          "State": "ENABLED",
+          "Description": "Notification for EC2 lifecycle monitoring",
+          "EventBusName": "default",
+          "Targets": [{
+            "Id": "Ida2d047bb-c304-461d-9adb-c9f6a9e6bb15",
+            "Arn": {
+              "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:dogi-slack-notification"
+            }
+          }]
+        }
+      }
+    },
+    "Parameters": {}
+  }
