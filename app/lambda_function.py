@@ -124,6 +124,7 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, in
         "terminated": f"Good job {creator_info['username']} 🥰🥰🥰",
         "stopping": ec2_stop_reminders[random.randint(0, len(ec2_stop_reminders) - 1)],
     }
+    ebs_warning = "\n⚠️ Large EBS ⚠️" if int(instance_info['ebs_volume_size']) > 1024 else ""
     # 1️⃣ 組出 Slack blocks
     blocks = [
         {
@@ -153,7 +154,7 @@ def send_ec2_event_to_slack(instance_info, creator_info, action_type, region, in
                 },
                 {
                     "type": "mrkdwn",
-                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})" + " \n⚠️ Large EBS ⚠️" if (instance_info['ebs_volume_size']) > 2 else "",
+                    "text": f"*EBS:*\n{instance_info['ebs_volume_size']} GiB ({instance_info['ebs_volume_type']})" + ebs_warning,
                 },
                 {
                     "type": "mrkdwn",
