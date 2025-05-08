@@ -1,0 +1,20 @@
+auth:
+	aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin YOUR_AWS_ACCOUNT_ID.dkr.ecr.ap-northeast-1.amazonaws.com
+build:
+	docker build -t YOUR_ECR_REPO_NAME .
+tag:
+	docker tag YOUR_ECR_REPO_NAME:latest YOUR_AWS_ACCOUNT_ID.dkr.ecr.ap-northeast-1.amazonaws.com/YOUR_ECR_REPO_NAME:latest
+push:
+	docker push YOUR_AWS_ACCOUNT_ID.dkr.ecr.ap-northeast-1.amazonaws.com/YOUR_ECR_REPO_NAME:latest
+test:
+	sam local invoke SlackNotifyFunction -e event.json
+update:
+	aws lambda update-function-code \
+		--function-name YOUR_LAMBDA_FUNCTION_NAME \
+		--image-uri YOUR_AWS_ACCOUNT_ID.dkr.ecr.ap-northeast-1.amazonaws.com/YOUR_ECR_REPO_NAME:latest
+deploy:
+	make auth
+	make build
+	make tag
+	make push
+	make update
