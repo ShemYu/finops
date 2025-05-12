@@ -51,9 +51,13 @@ def get_instance_info(instance_id, region):
         None,
     )
     ebs_id = root_volume["Ebs"]["VolumeId"] if root_volume else "unknown"
-    ebs_info = ec2.describe_volumes(VolumeIds=[ebs_id]).get("Volumes", [])
-    ebs_size = ebs_info[0].get("Size", "unknown")
-    ebs_type = ebs_info[0].get("VolumeType", "unknown")
+    if instance_state := response['Reservations'][0]['Instances'][0]['State']['Name'] != "terminated":
+        ebs_info = ec2.describe_volumes(VolumeIds=[ebs_id]).get("Volumes", [])
+        ebs_size = ebs_info[0].get("Size", "unknown")
+        ebs_type = ebs_info[0].get("VolumeType", "unknown")
+    else:
+        ebs_size = 0
+        ebs_type = "unknown"
 
     return {
         "instance_type": instance_type,
@@ -115,49 +119,87 @@ def get_creator_of_instance(
     if not event_names:
         raise ValueError(f"unsupported event_state: {event_state}")
 
-    next_token = None
-    while True:
-        kwargs = {
-            "LookupAttributes": [{"AttributeKey": "EventName", "AttributeValue": name}]
-            for name in event_names
-        }
-        kwargs["StartTime"] = start_time
-        kwargs["EndTime"] = now
-        kwargs["MaxResults"] = 50
-        if next_token:
-            kwargs["NextToken"] = next_token
+    # Iterate through each relevant event name
+    for event_name in event_names:
+        next_token = None
+        while True:
+            # Correctly construct kwargs for the current event name
+            kwargs = {
+                "LookupAttributes": [{"AttributeKey": "EventName", "AttributeValue": event_name}],
+                "StartTime": start_time,
+                "EndTime": now,
+                "MaxResults": 50,
+            }
+            if next_token:
+                kwargs["NextToken"] = next_token
 
-        resp = ct.lookup_events(**kwargs)
-        for event_rec in resp.get("Events", []):
-            evt = json.loads(event_rec["CloudTrailEvent"])
+            try: # Add error handling for the API call
+                resp = ct.lookup_events(**kwargs)
+            except Exception as e:
+                logger.error(f"Error calling lookup_events for {event_name}: {e}")
+                break # Break inner loop on error for this event name
 
-            items = (
-                evt.get("responseElements", {}).get("instancesSet", {}).get("items", [])
-            )
+            for event_rec in resp.get("Events", []):
+                try: # Add error handling for JSON parsing and key access
+                    evt = json.loads(event_rec["CloudTrailEvent"])
 
-            if not items:
-                items = (
-                    evt.get("requestParameters", {})
-                    .get("instancesSet", {})
-                    .get("items", [])
-                )
+                    # Check responseElements first
+                    items = (
+                        evt.get("responseElements", {})
+                        .get("instancesSet", {})
+                        .get("items", [])
+                    )
 
-            ids = [it.get("instanceId") for it in items]
-            logger.debug(f"event {event_rec['EventName']} ids: {ids}")
-            if instance_id in ids:
-                user = evt["userIdentity"]["arn"]
-                return {
-                    "time": event_rec["EventTime"]
-                    .astimezone(timezone(timedelta(hours=8)))
-                    .strftime("%Y%m%d %H:%M:%S"),
-                    "user_arn": user,
-                    "username": evt["userIdentity"].get("userName", "<role>"),
-                }
+                    # If not found, check requestParameters
+                    if not items:
+                        items = (
+                            evt.get("requestParameters", {})
+                            .get("instancesSet", {})
+                            .get("items", [])
+                        )
 
-        next_token = resp.get("NextToken")
-        if not next_token:
-            break
+                    ids = [it.get("instanceId") for it in items if it.get("instanceId")] # Ensure instanceId exists
+                    logger.debug(f"event {event_rec['EventName']} ids: {ids}")
 
+                    if instance_id in ids:
+                        user_identity = evt.get("userIdentity", {})
+                        user_arn = user_identity.get("arn")
+                        # Extract username, handle different identity types
+                        username = user_identity.get("userName")
+                        if not username:
+                             # Handle assumed roles, federated users, etc.
+                            session_context = user_identity.get("sessionContext", {})
+                            issuer_arn = session_context.get("sessionIssuer", {}).get("arn")
+                            if issuer_arn:
+                                username = f"{issuer_arn.split('/')[-1]} (AssumedRole)"
+                            elif user_identity.get("type") == "AssumedRole":
+                                username = f"{user_arn.split('/')[-2].split(':')[-1]}/{user_arn.split('/')[-1]} (AssumedRole)" # Extract role name and session name
+                            elif user_identity.get("type") == "FederatedUser":
+                                username = user_arn.split('/')[-1] + " (Federated)"
+                            elif user_identity.get("type") == "AWSAccount":
+                                username = f"Account:{user_identity.get('accountId')}"
+                            else:
+                                username = user_identity.get("type", "<unknown_identity>") # Fallback
+
+
+                        if user_arn: # Ensure we found an ARN
+                            return {
+                                "time": event_rec["EventTime"]
+                                .astimezone(timezone(timedelta(hours=8)))
+                                .strftime("%Y%m%d %H:%M:%S"),
+                                "user_arn": user_arn,
+                                "username": username,
+                            }
+                except (json.JSONDecodeError, KeyError, AttributeError) as e:
+                    logger.error(f"Error processing event record: {e}\nRecord: {event_rec}")
+                    continue # Skip malformed or unexpected event records
+
+            next_token = resp.get("NextToken")
+            if not next_token:
+                break # Exit pagination loop for the current event_name
+
+    # If no event was found after checking all event_names
+    logger.info(f"No CloudTrail event found for instance {instance_id} with state {event_state}")
     return None
 
 
