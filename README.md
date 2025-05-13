@@ -19,18 +19,24 @@ Currently, the "Monitoring" and "Alerting" core features have been implemented: 
 ```
 ├── app/
 │   └── lambda_function.py   # Main entry point for the Lambda function
+│   └── slack/
+│       └── slack_templates.py # Slack message formatting templates
 ├── iac/
 │   ├── cloudformation/      # CloudFormation templates (e.g., eventbridge.json)
 │   └── iam/                # IAM Policy definitions (e.g., information-readonly-policy.json)
 ├── .env                    # Environment variable config for Slack webhook, AWS parameters, etc.
-├── Makefile.example        # Makefile example
+├── .env.example            # Example environment file
+├── Makefile                # Makefile for build, test, and deployment commands
 ├── README.md               # Project documentation
 └── ...
 ```
 
 - `app/lambda_function.py`: Main Lambda function code, processes events from EventBridge and sends notifications to Slack.
+- `app/slack/slack_templates.py`: Contains functions to generate different Slack message block structures.
 - `iac/`: Contains IaC files, including CloudFormation and IAM Policy, for automated AWS resource deployment.
 - `.env`: Environment variable configuration file. Please fill in Slack Webhook URL, AWS parameters, and other sensitive information (do not commit to version control).
+- `.env.example`: An example file to show the required environment variables.
+- `Makefile`: Provides convenient commands for building the Docker image, testing locally, and deploying the Lambda function.
 
 ## Prerequisites
 
@@ -49,16 +55,17 @@ Currently, the "Monitoring" and "Alerting" core features have been implemented: 
 
 Before you begin, you need to set up your environment variables.
 
-1.  Copy the example Makefile:
+1.  Copy the example environment file:
     ```bash
-    cp Makefile.example Makefile
+    cp .env.example .env
     ```
-2.  Edit the `Makefile` and replace the placeholder values with your actual AWS Account ID, ECR Repository Name, and Lambda Function Name.
-    *   `YOUR_AWS_ACCOUNT_ID`
-    *   `YOUR_ECR_REPO_NAME`
-    *   `YOUR_LAMBDA_FUNCTION_NAME`
+2.  Edit the `.env` file and provide the necessary values:
+    *   `SLACK_WEBHOOK_URL`: Your Slack incoming webhook URL.
+    *   `AWS_ACCOUNT_ID`: Your AWS Account ID.
+    *   `ECR_REPO_NAME`: The name for your ECR repository (e.g., `your-repo/slack-notify`).
+    *   `LAMBDA_FUNCTION_NAME`: The name for your Lambda function (e.g., `my-slack-notifier`).
 
-    **Important:** The `Makefile` contains sensitive information and is included in `.gitignore` to prevent accidental commits to the repository.
+    **Important:** The `.env` file contains sensitive information and is included in `.gitignore` to prevent accidental commits to the repository. The `Makefile` will automatically load these variables.
 
 ### 2. Build Docker Image
 
@@ -68,7 +75,7 @@ To build the Docker image for the Lambda function:
 make build
 ```
 
-This command uses the `Dockerfile` in the project root to build an image tagged as `YOUR_ECR_REPO_NAME:latest` (or whatever you set as `YOUR_ECR_REPO_NAME` in the `Makefile`).
+This command uses the `Dockerfile` in the project root to build an image. The image name is taken from the `ECR_REPO_NAME` variable in your `.env` file.
 
 ### 3. Tag Image for ECR
 
@@ -78,7 +85,7 @@ After building, tag the image for your Amazon ECR (Elastic Container Registry):
 make tag
 ```
 
-This will tag the image with the full ECR URI: `YOUR_AWS_ACCOUNT_ID.dkr.ecr.ap-northeast-1.amazonaws.com/YOUR_ECR_REPO_NAME:latest`.
+This will tag the image with the full ECR URI using the `AWS_ACCOUNT_ID` and `ECR_REPO_NAME` from your `.env` file.
 
 ### 4. Authenticate Docker with ECR & Push Image
 
@@ -96,7 +103,7 @@ make push
 
 ### 5. Update Lambda Function
 
-Once the image is in ECR, update your Lambda function to use the new image:
+Once the image is in ECR, update your Lambda function to use the new image. The function name is taken from `LAMBDA_FUNCTION_NAME` in your `.env` file:
 
 ```bash
 make update
@@ -110,42 +117,45 @@ To run the entire deployment process (auth, build, tag, push, update) in one go:
 make deploy
 ```
 
+This command sequence is recommended for deploying changes after initial setup.
+
 ## Testing Locally
 
 You can test the Lambda function locally using AWS SAM CLI before deploying.
 
-1.  Ensure you have an `event.json` file in the root of your project. This file should contain the test event payload for your Lambda function.
-2.  Run the local invocation:
-
+1.  Ensure you have an `event.json` file in the root of your project. This file should contain the test event payload for your Lambda function, with a **valid EC2 instance ID** (e.g., `i-0123456789abcdef0`) to avoid errors.
+2.  First, build your SAM application if you haven't already:
     ```bash
     sam build
+    ```
+3.  Then, run the local invocation using the Makefile target:
+
+    ```bash
     make test
     ```
-    This command executes `sam local invoke SlackNotifyFunction -e event.json`, where `SlackNotifyFunction` is the logical ID of your function in your SAM template (if you are using one, or it's a conventional name for the test).
+    This command executes `sam local invoke SlackNotifyFunction -e event.json` (or the logical function name defined in `template.yaml`).
 
 ## Infrastructure as Code (IaC)
 
-This project uses IaC to manage AWS resources, with all templates stored in the `iac/` directory:
+This project uses AWS SAM (Serverless Application Model) with `template.yaml` to define and deploy the Lambda function and its related resources, such as the EventBridge rule that triggers it.
 
-- `iac/cloudformation/`: CloudFormation templates (e.g., eventbridge.json) for automated creation of EventBridge rules and other resources.
-- `iac/iam/`: IAM Policy definition files, which can be adjusted as needed.
+- **`template.yaml`**: Defines the AWS Lambda function, its Docker image source, and the EventBridge event source (`EC2 Instance State-change Notification`).
+- **`iac/cloudformation/eventbridge.json`**: This appears to be a standalone CloudFormation template for creating an EventBridge rule. If you are using `sam deploy` with `template.yaml`, the EventBridge rule defined there will be managed by SAM. This separate template might be for alternative deployment scenarios or for managing other EventBridge rules not directly tied to this Lambda function via SAM.
+- **`iac/iam/`**: Contains IAM Policy definition files. The Lambda's execution role and permissions are primarily managed by SAM based on the `template.yaml` definitions and AWS managed policies, but custom policies can be referenced or defined here if needed.
 
-### Automated Deployment of EventBridge Rule
+### Deploying with AWS SAM
 
-`iac/cloudformation/eventbridge.json` creates an EventBridge rule named `ec2-state-notify` that listens for EC2 instance state changes (such as running, terminated, stopping) and triggers the specified Lambda (default is `dogi-slack-notification`).
-
-**Deployment:**
+To deploy the Lambda function and associated EventBridge rule using AWS SAM:
 
 ```bash
-aws cloudformation deploy \
-  --template-file iac/cloudformation/eventbridge.json \
-  --stack-name Ec2StateChangeToSlackRule \
-  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+sam deploy --guided
 ```
 
+Follow the prompts to configure your deployment (stack name, region, parameters, etc.). SAM will package your application, upload it to S3 (for non-container builds) or ECR (for container builds if not already pushed), and deploy the CloudFormation stack defined in `template.yaml`.
+
 > Note:
-> - Please ensure your AWS CLI has the necessary permissions to create EventBridge, IAM, and other resources.
-> - If your Lambda function does not use the default name, modify the ARN in the Targets section of eventbridge.json before deployment.
+> - Ensure your AWS CLI has the necessary permissions to create/update Lambda functions, ECR repositories, EventBridge rules, IAM roles, and CloudFormation stacks.
+> - The `template.yaml` should be the primary source for defining the Lambda function and its direct event triggers when using the SAM workflow.
 
 ---
 
