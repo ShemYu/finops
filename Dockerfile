@@ -4,8 +4,9 @@ FROM public.ecr.aws/lambda/python:3.12
 COPY requirements.txt ${LAMBDA_TASK_ROOT}/
 RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt
 
-COPY app/lambda_function.py ${LAMBDA_TASK_ROOT}/
+# Copy the entire app directory
+COPY app/ ${LAMBDA_TASK_ROOT}/app/
 COPY .env ${LAMBDA_TASK_ROOT}/
 
-# 設定 handler：module_name.function_name
-CMD [ "lambda_function.lambda_handler" ]
+# Set handler: directory.module_name.function_name
+CMD [ "app.lambda_function.lambda_handler" ]
